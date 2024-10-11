@@ -1,8 +1,14 @@
+x-common: &common-settings
+  restart: unless-stopped
+  networks:
+    - journal
+
+
 services:
   journal-db:
     image: linuxserver/mariadb:latest
     container_name: journal-db
-    restart: unless-stopped
+    <<: *common-settings
     environment:
       - TZ=${TZ}
       - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
@@ -10,8 +16,6 @@ services:
       - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE}
       - MARIADB_AUTO_UPGRADE=${MARIADB_AUTO_UPGRADE}
-    networks:
-      - journal
     volumes:
       - ./db/config:/config
       - ./db/data:/var/lib/mysql
@@ -22,32 +26,37 @@ services:
       - journal-db
     image: wordpress:6-php8.2-fpm-alpine
     container_name: journal-wordpress
-    restart: unless-stopped
+    <<: *common-settings
     env_file:
       - "./.env"
-    networks:
-      - journal
     volumes:
       - "./data:/var/www/html"
       - "./php.ini:/usr/local/etc/php/conf.d/custom.ini"
 
   nginx:
+    depends_on:
+      - journal
     image: nginx:latest
     container_name: journal-nginx
-    restart: unless-stopped
+    <<: *common-settings
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf
       - "./data:/var/www/html"
-    networks:
-      - journal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   ftp:
+    depends_on:
+      - journal
     image: stilliard/pure-ftpd:latest
     container_name: ftp
-    restart: unless-stopped
+    <<: *common-settings
     environment:
       PUBLICHOST: localhost
       FTP_USER_NAME: "www-data"
@@ -60,11 +69,54 @@ services:
     ports:
       - "51291:21"
       - "26385-26394:30000-30009"
-    networks: 
-      - journal
     expose:
       - "26385-26394:30000-30009"
-  
+    healthcheck:
+      test: ["CMD", "pure-ftpd", "--version"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  db-backup:
+    image: tiredofit/db-backup:latest
+    container_name: db-backup
+    <<: *common-settings
+    environment:
+      - DB_TYPE=mariadb
+      - DB_HOST=journal-db
+      - DB_NAME=${MYSQL_DATABASE}
+      - DB_USER=${MYSQL_USER}
+      - DB_PASS=${MYSQL_PASSWORD}
+      - DB_DUMP_FREQ=1440
+      - DB_DUMP_TARGET=/backup
+      - COMPRESSION=BZ
+      - TIMEZONE=${TZ}
+    volumes:
+      - ./db/backup:/backup
+    depends_on:
+      - journal-db
+    healthcheck:
+      test: ["CMD", "pgrep", "cron"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  file-backup:
+    image: alpine:latest
+    container_name: file-backup
+    <<: *common-settings
+    command: /bin/sh -c "while true; do tar czf /backup/journal_files_$(date +%Y%m%d%H%M%S).tar.gz /data && sleep 86400; done"
+    volumes:
+      - ./data:/data
+      - ./file-backup:/backup
+    depends_on:
+      - journal
+    healthcheck:
+      test: ["CMD", "pgrep", "tar"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
 networks:
   journal:
     driver: bridge
