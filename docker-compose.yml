@@ -1,0 +1,58 @@
+services:
+  journal-db:
+    image: linuxserver/mariadb:latest
+    container_name: journal-db
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MARIADB_AUTO_UPGRADE=${MARIADB_AUTO_UPGRADE}
+    networks:
+      - journal
+    volumes:
+      - ./db/config:/config
+      - ./db/data:/var/lib/mysql
+      - ./db/logs:/var/log/mysql
+
+  journal:
+    depends_on:
+      - journal-db
+    image: wordpress:6-php8.2-fpm-alpine
+    container_name: journal-wordpress
+    restart: unless-stopped
+    env_file:
+      - "./.env"
+    networks:
+      - journal
+    volumes:
+      - "./data:/var/www/html"
+      - "./php.ini:/usr/local/etc/php/conf.d/custom.ini"
+
+  ftp:
+    image: stilliard/pure-ftpd:latest
+    container_name: ftp
+    restart: unless-stopped
+    environment:
+      PUBLICHOST: localhost
+      FTP_USER_NAME: "www-data"
+      FTP_USER_PASS: "CHANGE TO VALUE"
+      FTP_USER_HOME: "/ftp"
+      FTP_USER_UID: 82
+      FTP_USER_GID: 82
+    volumes:
+      - ${HOME}/wordpress/data:/ftp
+    ports:
+      - "51291:21"
+      - "26385-26394:30000-30009"
+    networks: 
+      - caddy
+    expose:
+      - "26385-26394:30000-30009"
+  
+networks:
+  journal:
+    driver: bridge
+    name: "journal"
